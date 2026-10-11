@@ -23,7 +23,7 @@ function normalizeRepoUrl(url) {
 
 function verifySignature(req) {
   const sig = req.headers['x-hub-signature-256'];
-  if (!sig) return false;
+  if (!sig || !req.rawBody) return false;
   const expected = 'sha256=' + crypto
     .createHmac('sha256', WEBHOOK_SECRET)
     .update(req.rawBody)
@@ -43,7 +43,10 @@ app.post('/webhook', (req, res) => {
   const event = req.headers['x-github-event'];
   if (event !== 'push') return res.status(202).send('ignored');
 
-  const repoUrl = normalizeRepoUrl(req.body.repository.html_url);
+  const htmlUrl = req.body?.repository?.html_url;
+  if (!htmlUrl) return res.status(400).send('bad payload');
+
+  const repoUrl = normalizeRepoUrl(htmlUrl);
   const sockets = registry.get(repoUrl);
 
   if (sockets && sockets.size > 0) {
@@ -56,20 +59,19 @@ app.post('/webhook', (req, res) => {
   res.status(200).send('ok');
 });
 
-
-const interval = setInterval(() => {
-  for (const ws of wss.clients) {
-    if (ws.readyState === ws.OPEN) ws.ping();
-  }
-}, 25000);
-wss.on('close', () => clearInterval(interval));
-ws.on('close', (code) => console.log(`[relay] socket closed, code ${code}, repo ${registeredRepo}`));
-ws.on('error', (err) => console.log('[relay] socket error:', err.message));
-
 const port = process.env.PORT || 3000;
 const server = app.listen(port, () => console.log(`Relay listening on ${port}`));
 
+// wss must be created BEFORE anything that uses it
 const wss = new WebSocketServer({ server, path: '/ws' });
+
+// Heartbeat: keeps idle WebSockets alive through the platform proxy
+const interval = setInterval(() => {
+  for (const client of wss.clients) {
+    if (client.readyState === client.OPEN) client.ping();
+  }
+}, 25000);
+wss.on('close', () => clearInterval(interval));
 
 wss.on('connection', (ws) => {
   let registeredRepo = null;
@@ -83,14 +85,23 @@ wss.on('connection', (ws) => {
     }
     if (msg.type === 'register' && typeof msg.repoUrl === 'string') {
       registeredRepo = normalizeRepoUrl(msg.repoUrl);
-      console.log(`[relay] registered: ${registeredRepo}`);  //added this for debug
+      console.log(`[relay] registered: ${registeredRepo}`);
 
       if (!registry.has(registeredRepo)) registry.set(registeredRepo, new Set());
       registry.get(registeredRepo).add(ws);
     }
   });
 
-  ws.on('close', () => {
-    if (registeredRepo) registry.get(registeredRepo)?.delete(ws);
+  ws.on('close', (code) => {
+    console.log(`[relay] socket closed, code ${code}, repo ${registeredRepo}`);
+    if (registeredRepo) {
+      const set = registry.get(registeredRepo);
+      if (set) {
+        set.delete(ws);
+        if (set.size === 0) registry.delete(registeredRepo);
+      }
+    }
   });
+
+  ws.on('error', (err) => console.log('[relay] socket error:', err.message));
 });
