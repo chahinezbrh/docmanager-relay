@@ -56,6 +56,16 @@ app.post('/webhook', (req, res) => {
   res.status(200).send('ok');
 });
 
+
+const interval = setInterval(() => {
+  for (const ws of wss.clients) {
+    if (ws.readyState === ws.OPEN) ws.ping();
+  }
+}, 25000);
+wss.on('close', () => clearInterval(interval));
+ws.on('close', (code) => console.log(`[relay] socket closed, code ${code}, repo ${registeredRepo}`));
+ws.on('error', (err) => console.log('[relay] socket error:', err.message));
+
 const port = process.env.PORT || 3000;
 const server = app.listen(port, () => console.log(`Relay listening on ${port}`));
 
