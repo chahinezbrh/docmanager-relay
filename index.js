@@ -65,13 +65,15 @@ const server = app.listen(port, () => console.log(`Relay listening on ${port}`))
 // wss must be created BEFORE anything that uses it
 const wss = new WebSocketServer({ server, path: '/ws' });
 
-// Heartbeat: keeps idle WebSockets alive through the platform proxy
 const interval = setInterval(() => {
   for (const client of wss.clients) {
     if (client.readyState === client.OPEN) client.ping();
   }
 }, 25000);
 wss.on('close', () => clearInterval(interval));
+
+// Heartbeat: keeps idle WebSockets alive through the platform proxy
+
 
 wss.on('connection', (ws) => {
   let registeredRepo = null;
